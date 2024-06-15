@@ -4,10 +4,11 @@ package collector
 
 import (
 	"encoding/json"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/mitchellh/mapstructure"
 )
@@ -19,9 +20,9 @@ type PrinterObjectResponse struct {
 }
 
 type PrinterObjectStatus struct {
-	GcodeMove     PrinterObjectGcodeMove     `json:"gcode_move"`
-	Toolhead      PrinterObjectToolhead      `json:"toolhead"`
-	Extruder      PrinterObjectExtruder      `json:"extruder"`
+	GcodeMove PrinterObjectGcodeMove `json:"gcode_move"`
+	Toolhead  PrinterObjectToolhead  `json:"toolhead"`
+	// Extruder      PrinterObjectExtruder      `json:"extruder"`
 	HeaterBed     PrinterObjectHeaterBed     `json:"heater_bed"`
 	Fan           PrinterObjectFan           `json:"fan"`
 	IdleTimeout   PrinterObjectIdleTimeout   `json:"idle_timeout"`
@@ -33,6 +34,7 @@ type PrinterObjectStatus struct {
 	TemperatureSensors map[string]PrinterObjectTemperatureSensor
 	TemperatureFans    map[string]PrinterObjectTemperatureFan
 	OutputPins         map[string]PrinterObjectOutputPin
+	Extruders          map[string]PrinterObjectExtruder
 }
 
 type PrinterObjectMcu struct {
@@ -85,8 +87,6 @@ type PrinterObjectExtruder struct {
 	PressureAdvance float64 `json:"pressure_advance"`
 	SmoothTime      float64 `json:"smooth_time"`
 }
-
-const extruderQuery string = "extruder"
 
 type PrinterObjectHeaterBed struct {
 	Temperature float64 `json:"temperature"`
@@ -165,29 +165,40 @@ func (f *PrinterObjectStatus) UnmarshalJSON(bs []byte) (err error) {
 		temperatureSensors := make(map[string]PrinterObjectTemperatureSensor)
 		temperatureFans := make(map[string]PrinterObjectTemperatureFan)
 		outputPins := make(map[string]PrinterObjectOutputPin)
+		extruders := make(map[string]PrinterObjectExtruder)
 		for k, v := range m {
 			if strings.HasPrefix(k, "temperature_sensor") {
 				key := strings.Replace(k, "temperature_sensor ", "", 1)
 				value := PrinterObjectTemperatureSensor{}
 				mapstructure.Decode(v, &value)
 				temperatureSensors[key] = value
+				continue
 			}
 			if strings.HasPrefix(k, "temperature_fan") {
 				key := strings.Replace(k, "temperature_fan ", "", 1)
 				value := PrinterObjectTemperatureFan{}
 				mapstructure.Decode(v, &value)
 				temperatureFans[key] = value
+				continue
 			}
 			if strings.HasPrefix(k, "output_pin") {
 				key := strings.Replace(k, "output_pin ", "", 1)
 				value := PrinterObjectOutputPin{}
 				mapstructure.Decode(v, &value)
 				outputPins[key] = value
+				continue
+			}
+			if strings.HasPrefix(k, "extruder") {
+				value := PrinterObjectExtruder{}
+				mapstructure.Decode(v, &value)
+				extruders[k] = value
+				continue
 			}
 		}
 		f.TemperatureSensors = temperatureSensors
 		f.TemperatureFans = temperatureFans
 		f.OutputPins = outputPins
+		f.Extruders = extruders
 	}
 	return err
 }
@@ -198,23 +209,31 @@ type PrinterObjectsList struct {
 	} `json:"result"`
 }
 
+type CustomSensors struct {
+	TemperatureSensors []string
+	TemperatureFans    []string
+	OutputPins         []string
+	Extruders          []string
+}
+
 var (
 	customTemperatureSensors map[string][]string = make(map[string][]string)
 	customTemperatureFans    map[string][]string = make(map[string][]string)
 	customOutputPins         map[string][]string = make(map[string][]string)
+	extruders                map[string][]string = make(map[string][]string)
 )
 
 // fetchCustomSensors queries klipper for the complete list and printer objects and
 // returns the subset of `temperature_sensor`, `temperature_fan` and `output_pin`
 // objects that have custom names.
-func (c Collector) fetchCustomSensors(klipperHost string, apiKey string) (*[]string, *[]string, *[]string, error) {
+func (c Collector) fetchCustomSensors(klipperHost string, apiKey string) (*CustomSensors, error) {
 	var url = "http://" + klipperHost + "/printer/objects/list"
 
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Error(err)
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if apiKey != "" {
 		req.Header.Set("X-API-KEY", apiKey)
@@ -222,13 +241,13 @@ func (c Collector) fetchCustomSensors(klipperHost string, apiKey string) (*[]str
 	res, err := client.Do(req)
 	if err != nil {
 		log.Error(err)
-		return nil, nil, nil, err
+		return nil, err
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
 		log.Error(err)
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	var response PrinterObjectsList
@@ -236,12 +255,13 @@ func (c Collector) fetchCustomSensors(klipperHost string, apiKey string) (*[]str
 	err = json.Unmarshal(data, &response)
 	if err != nil {
 		log.Error(err)
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	temperatureSensors := []string{}
 	temperatureFans := []string{}
 	outputPins := []string{}
+	extruders := []string{}
 	for o := range response.Result.Objects {
 		// find temperature_sensor
 		if strings.HasPrefix(response.Result.Objects[o], "temperature_sensor ") {
@@ -255,9 +275,18 @@ func (c Collector) fetchCustomSensors(klipperHost string, apiKey string) (*[]str
 		if strings.HasPrefix(response.Result.Objects[o], "output_pin ") {
 			outputPins = append(outputPins, strings.Replace(response.Result.Objects[o], "output_pin ", "", 1))
 		}
+		// find extruders
+		if strings.HasPrefix(response.Result.Objects[o], "extruder") {
+			extruders = append(extruders, response.Result.Objects[o])
+		}
 	}
 
-	return &temperatureSensors, &temperatureFans, &outputPins, nil
+	return &CustomSensors{
+		TemperatureSensors: temperatureSensors,
+		TemperatureFans:    temperatureFans,
+		OutputPins:         outputPins,
+		Extruders:          extruders,
+	}, nil
 }
 
 func (c Collector) fetchMoonrakerPrinterObjects(klipperHost string, apiKey string) (*PrinterObjectResponse, error) {
@@ -267,15 +296,16 @@ func (c Collector) fetchMoonrakerPrinterObjects(klipperHost string, apiKey strin
 	if _, ok := customTemperatureSensors[klipperHost]; ok {
 		// already have custom sensors, skip
 	} else {
-		ts, tf, op, err := c.fetchCustomSensors(klipperHost, apiKey)
+		customSensors, err := c.fetchCustomSensors(klipperHost, apiKey)
 		if err != nil {
 			log.Error(err)
 			return nil, err
 		}
-		log.Infof("Found custom sensors: %+v %+v %+v", ts, tf, op)
-		customTemperatureSensors[klipperHost] = *ts
-		customTemperatureFans[klipperHost] = *tf
-		customOutputPins[klipperHost] = *op
+		log.Infof("Found custom sensors: %+v", customSensors)
+		customTemperatureSensors[klipperHost] = customSensors.TemperatureSensors
+		customTemperatureFans[klipperHost] = customSensors.TemperatureFans
+		customOutputPins[klipperHost] = customSensors.OutputPins
+		extruders[klipperHost] = customSensors.Extruders
 	}
 
 	customSensorsQuery := ""
@@ -288,6 +318,7 @@ func (c Collector) fetchMoonrakerPrinterObjects(klipperHost string, apiKey strin
 	for op := range customOutputPins[klipperHost] {
 		customSensorsQuery += "&output_pin%20" + customOutputPins[klipperHost][op]
 	}
+	extruderQuery := strings.Join(extruders[klipperHost], "&")
 
 	var url = "http://" +
 		klipperHost + "/printer/objects/query" +

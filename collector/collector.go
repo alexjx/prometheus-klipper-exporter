@@ -392,26 +392,41 @@ func (c Collector) Collect(ch chan<- prometheus.Metric) {
 			result.Result.Status.Toolhead.SquareCornerVelocity)
 
 		// extruder
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc("klipper_extruder_temperature", "Klipper extruder temperature.", nil, nil),
-			prometheus.GaugeValue,
-			result.Result.Status.Extruder.Temperature)
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc("klipper_extruder_target", "Klipper extruder target.", nil, nil),
-			prometheus.GaugeValue,
-			result.Result.Status.Extruder.Target)
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc("klipper_extruder_power", "Klipper extruder power.", nil, nil),
-			prometheus.GaugeValue,
-			result.Result.Status.Extruder.Power)
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc("klipper_extruder_pressure_advance", "Klipper extruder pressure advance.", nil, nil),
-			prometheus.GaugeValue,
-			result.Result.Status.Extruder.PressureAdvance)
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc("klipper_extruder_smooth_time", "Klipper extruder smooth time.", nil, nil),
-			prometheus.GaugeValue,
-			result.Result.Status.Extruder.SmoothTime)
+		extruderLabels := []string{"extruder"}
+		extruderTemperature := prometheus.NewDesc("klipper_extruder_temperature", "Klipper extruder temperature.", extruderLabels, nil)
+		extruderTarget := prometheus.NewDesc("klipper_extruder_target", "Klipper extruder target.", extruderLabels, nil)
+		extruderPower := prometheus.NewDesc("klipper_extruder_power", "Klipper extruder power.", extruderLabels, nil)
+		extruderPressureAdvance := prometheus.NewDesc("klipper_extruder_pressure_advance", "Klipper extruder pressure advance.", extruderLabels, nil)
+		extruderSmoothTime := prometheus.NewDesc("klipper_extruder_smooth_time", "Klipper extruder smooth time.", extruderLabels, nil)
+		for extruder, extruderData := range result.Result.Status.Extruders {
+			extruderName := getValidLabelName(extruder)
+
+			ch <- prometheus.MustNewConstMetric(
+				extruderTemperature,
+				prometheus.GaugeValue,
+				extruderData.Temperature,
+				extruderName)
+			ch <- prometheus.MustNewConstMetric(
+				extruderTarget,
+				prometheus.GaugeValue,
+				extruderData.Target,
+				extruderName)
+			ch <- prometheus.MustNewConstMetric(
+				extruderPower,
+				prometheus.GaugeValue,
+				extruderData.Power,
+				extruderName)
+			ch <- prometheus.MustNewConstMetric(
+				extruderPressureAdvance,
+				prometheus.GaugeValue,
+				extruderData.PressureAdvance,
+				extruderName)
+			ch <- prometheus.MustNewConstMetric(
+				extruderSmoothTime,
+				prometheus.GaugeValue,
+				extruderData.SmoothTime,
+				extruderName)
+		}
 
 		// heater_bed
 		ch <- prometheus.MustNewConstMetric(
